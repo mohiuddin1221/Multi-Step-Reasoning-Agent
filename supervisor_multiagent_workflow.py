@@ -2,13 +2,17 @@ from imaplib import Commands
 import os
 from dotenv import load_dotenv
 from openai import BaseModel
-from pydantic import Field
+from pydantic import Field, validator
+import requests
+from sqlalchemy import literal
 load_dotenv()
 from typing import Literal
 from langchain_openai import AzureChatOpenAI
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langchain_core import HumanMessage, SystemMessage
 from langgraph.types import Command
+from langgraph.prebuilt import create_react_agent
+from langchain.tools import tool
 
 
 
@@ -101,5 +105,87 @@ def enhancer(state: MessagesState) ->Command[Literal["supervisor_node"]]:
         },
         goto = "supervisor_node"
     )
+@tool("tavily_search", return_direct=True)
+def tavily_search(query: str):
 
+    url = "https://api.tavily.com/search"
+    headers = {
+        "Authorization": "YOUR_TAVILY_API_KEY"
+    }
+    params = {
+        "query": query,
+        "num_results": 3
+    }
+    response = requests.post(url, headers = headers, params=params)
+    data = response.json()
+    results = data.get("results",[])
+    return {
+        "status": "successfull",
+        "results": results
+
+    }
+
+def researcher_node(state: MessagesState) -> Command[Literal["validator"]]:
+    """
+    Research agent node that gathers information using Tavily search.
+    Takes the current task state, performs relevant research,
+    and returns findings for validation.
+    """
+
+    research_agent = create_react_agent(
+        llm,
+        tools=["tavily_search"],
+        prompt=(
+            "You are an Information Specialist with expertise in comprehensive research. "
+            "Your responsibilities include:\n"
+            "1. Identifying key information needs based on the query context\n"
+            "2. Gathering relevant, accurate, and up-to-date information from reliable sources\n"
+            "3. Organizing findings in a structured, easily digestible format\n"
+            "4. Citing sources when possible to establish credibility\n"
+            "5. Focusing exclusively on information gathering - avoid analysis or implementation\n\n"
+            "Provide thorough, factual responses without speculation where information is unavailable."
+        )
+    )
+
+    result = research_agent.invoke(state)
+    return Command(
+        update = {
+            "messages" : [
+                HumanMessage(content= result["messages"][-1].content, name= "researcher")
+            ]
+        },
+        goto = "validator"
+    )
+
+@tool("python_repl_tool", return_direct=True)
+def python_repl_tool(code: str) -> Dict[str, Any]:
+    """
+    Executes the given Python code string in a REPL-like environment.
+    Useful for math, data manipulation, or general Python scripting.
+    Returns the result or error.
+    """
+    try:
+        # Create a safe namespace for execution
+        local_vars = {}
+        exec(code, {}, local_vars)
+        return {"output": str(local_vars)}
+    except Exception as e:
+        return {"error": str(e)}
+
+def code_node(state: MessagesState) -> Command[literal["validator"]]:
+    code_agent = create_react_agent(
+        llm,
+        tools= ["python_repl_tool"],
+        prompt = "You are a coder and analyst. Focus on mathematical calculations, analyzing, solving math questions, "
+            "and executing code. Handle technical problem-solving and data tasks."
+    )
+    response = code_agent.invoke(state)
+    return Command(
+        update = {
+            "messages": [
+                HumanMessage(content= response["messages"][-1].content, name= "coder" )
+            ]
+        },
+        goto = validator
+    )
 
