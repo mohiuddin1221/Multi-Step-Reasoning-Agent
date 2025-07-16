@@ -1,0 +1,10 @@
+{
+    "dependencies": [
+        "langchain_openai",
+        "./your_package"
+    ],
+    "graphs": {
+        "my_agent": "./supervisor_multiagent_workflow.py:app"
+    },
+    "env": "./.env"
+}
